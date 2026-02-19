@@ -1,0 +1,143 @@
+---
+# =============================================================================
+# roles/awx_setup/tasks/main.yml
+# OBIETTIVO: Deployare AWX nel namespace gabvirt usando Helm.
+#
+# Perché Helm e non Operator?
+#   - L'AWX Operator richiede kustomize e permessi cluster-wide per CRD
+#   - Il chart Helm di AWX deploya tutto nel namespace target direttamente
+#   - È il metodo più pulito per un singolo namespace senza cluster-admin
+#
+# Cosa viene creato:
+#   - AWX Web (UI + API)
+#   - AWX Task (esecutore job)
+#   - PostgreSQL (database)
+#   - Redis (cache/broker)
+#   - Route OCP per accesso esterno
+# =============================================================================
+
+- name: "1. Verifica che Helm sia installato"
+  ansible.builtin.command: helm version --short
+  register: helm_version
+  failed_when: helm_version.rc != 0
+  changed_when: false
+  tags: awx_setup
+
+- name: "2. Mostra versione Helm"
+  debug:
+    msg: "Helm installato: {{ helm_version.stdout }}"
+  tags: awx_setup
+
+- name: "3. Aggiungi repo Helm AWX"
+  ansible.builtin.command: >
+    helm repo add awx-operator https://ansible.github.io/awx-operator/
+  register: repo_add
+  changed_when: "'has been added' in repo_add.stdout"
+  failed_when: repo_add.rc != 0 and 'already exists' not in repo_add.stderr
+  tags: awx_setup
+
+- name: "4. Aggiorna repo Helm"
+  ansible.builtin.command: helm repo update
+  changed_when: false
+  tags: awx_setup
+
+- name: "5. Crea namespace gabvirt se non esiste"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ ocp_namespace }}"
+  tags: awx_setup
+
+- name: "6. Deploy AWX Operator via Helm"
+  ansible.builtin.command: >
+    helm upgrade --install awx-operator awx-operator/awx-operator
+    --namespace {{ ocp_namespace }}
+    --set AWX.enabled=false
+  register: helm_operator
+  changed_when: true
+  tags: awx_setup
+
+- name: "7. Attesa avvio AWX Operator"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: awx-operator-controller-manager
+    namespace: "{{ ocp_namespace }}"
+    wait: true
+    wait_condition:
+      type: Available
+      status: "True"
+    wait_timeout: 180
+  tags: awx_setup
+
+- name: "8. Crea istanza AWX"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: awx.ansible.com/v1beta1
+      kind: AWX
+      metadata:
+        name: awx
+        namespace: "{{ ocp_namespace }}"
+      spec:
+        service_type: ClusterIP
+        ingress_type: Route
+        hostname: "awx-{{ ocp_namespace }}.{{ ocp_apps_domain }}"
+        # Risorse contenute per lab
+        web_resource_requirements:
+          requests:
+            cpu: 500m
+            memory: 1Gi
+          limits:
+            cpu: "1"
+            memory: 2Gi
+        task_resource_requirements:
+          requests:
+            cpu: 250m
+            memory: 512Mi
+          limits:
+            cpu: 500m
+            memory: 1Gi
+        postgres_storage_requirements:
+          requests:
+            storage: 8Gi
+        postgres_storage_class: "{{ dv_storage_class }}"
+  tags: awx_setup
+
+- name: "9. Attesa avvio AWX Web (può richiedere 5-10 minuti)"
+  kubernetes.core.k8s_info:
+    api_version: apps/v1
+    kind: Deployment
+    name: awx-web
+    namespace: "{{ ocp_namespace }}"
+    wait: true
+    wait_condition:
+      type: Available
+      status: "True"
+    wait_timeout: 600
+  tags: awx_setup
+
+- name: "10. Recupera password admin AWX"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: awx-admin-password
+    namespace: "{{ ocp_namespace }}"
+  register: awx_secret
+  tags: awx_setup
+
+- name: "11. Mostra URL e credenziali AWX"
+  debug:
+    msg: |
+      🎉 AWX deployato con successo!
+
+      URL:      https://awx-{{ ocp_namespace }}.{{ ocp_apps_domain }}
+      Username: admin
+      Password: {{ awx_secret.resources[0].data.password | b64decode }}
+
+      Prossimo step: configura il Job Template in AWX puntando a:
+        https://github.com/gabri-souce/migration-project.git
+  tags: awx_setup

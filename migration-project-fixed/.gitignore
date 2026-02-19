@@ -1,0 +1,7 @@
+*.qcow2
+*.vmdk
+*.zip
+__pycache__/
+*.retry
+.ansible/
+*.bak

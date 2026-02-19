@@ -1,0 +1,96 @@
+---
+# =============================================================================
+# roles/vm_provisioning/tasks/main.yml
+# OBIETTIVO: Creare la VirtualMachine KubeVirt a partire dal PVC importato.
+# =============================================================================
+
+- name: "1. Verifica che il DataVolume sia Succeeded prima di procedere"
+  kubernetes.core.k8s_info:
+    api_version: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    name: "{{ dv_name }}"
+    namespace: "{{ ocp_namespace }}"
+  register: dv_check
+  failed_when: >
+    dv_check.resources | length == 0 or
+    dv_check.resources[0].status.phase != 'Succeeded'
+  tags: vm_provisioning
+
+- name: "2. Deploy VirtualMachine (con instancetype e memory configurati)"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: kubevirt.io/v1
+      kind: VirtualMachine
+      metadata:
+        name: "{{ vm_name }}"
+        namespace: "{{ ocp_namespace }}"
+        labels:
+          app: "{{ vm_name }}"
+          instancetype.kubevirt.io/default-instancetype: "{{ vm_instancetype }}"
+          instancetype.kubevirt.io/default-preference: "{{ vm_preference }}"
+      spec:
+        running: true
+        instancetype:
+          kind: VirtualMachineClusterInstancetype
+          name: "{{ vm_instancetype }}"
+        preference:
+          kind: VirtualMachineClusterPreference
+          name: "{{ vm_preference }}"
+        template:
+          metadata:
+            labels:
+              app: "{{ vm_name }}"
+          spec:
+            domain:
+              devices:
+                disks:
+                  - name: rootdisk
+                    disk:
+                      bus: virtio
+                interfaces:
+                  - name: default
+                    masquerade: {}
+            networks:
+              - name: default
+                pod: {}
+            volumes:
+              - name: rootdisk
+                dataVolume:
+                  name: "{{ dv_name }}"
+  tags: vm_provisioning
+
+- name: "3. Attesa avvio VMI (VirtualMachineInstance)"
+  kubernetes.core.k8s_info:
+    api_version: kubevirt.io/v1
+    kind: VirtualMachineInstance
+    name: "{{ vm_name }}"
+    namespace: "{{ ocp_namespace }}"
+  register: vmi_status
+  retries: 60
+  delay: 10
+  until: >
+    vmi_status.resources is defined and
+    vmi_status.resources | length > 0 and
+    vmi_status.resources[0].status is defined and
+    vmi_status.resources[0].status.phase is defined and
+    vmi_status.resources[0].status.phase == 'Running'
+  tags: vm_provisioning
+
+- name: "4. Mostra info VM"
+  debug:
+    msg: |
+      🎉 Migrazione completata con successo!
+      
+      VM Name:    {{ vm_name }}
+      Namespace:  {{ ocp_namespace }}
+      Phase:      {{ vmi_status.resources[0].status.phase }}
+      Node:       {{ vmi_status.resources[0].status.nodeName | default('N/A') }}
+      IP:         {{ vmi_status.resources[0].status.interfaces[0].ipAddress | default('N/A') }}
+      
+      Per connetterti alla console:
+        virtctl console {{ vm_name }} -n {{ ocp_namespace }}
+      
+      Per connetterti via VNC:
+        virtctl vnc {{ vm_name }} -n {{ ocp_namespace }}
+  tags: vm_provisioning

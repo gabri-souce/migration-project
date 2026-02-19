@@ -1,0 +1,106 @@
+---
+# =============================================================================
+# roles/migration_cdi/tasks/main.yml
+# OBIETTIVO: Far convertire il VMDK a CDI (Containerized Data Importer) e
+#            creare un PVC con il disco pronto per KubeVirt.
+#
+# FLUSSO CDI:
+#   1. Creiamo un Secret Kubernetes con le credenziali S3 di MinIO
+#   2. Creiamo un DataVolume che punta all'oggetto S3 (dentro il cluster)
+#   3. CDI lancia automaticamente un pod "importer" che:
+#      - Scarica il VMDK da MinIO (URL interno: http://landing-zone-service:9000)
+#      - Converte il VMDK in formato raw/qcow2
+#      - Scrive il risultato nel PVC
+#   4. Attendiamo che il DataVolume raggiunga phase: Succeeded
+#
+# ERRORI RISOLTI:
+#   1. "secret s3-credentials not found" → ora creiamo il secret PRIMA del DV
+#   2. "spec.source.s3.secret_ref" → il campo corretto è secretRef (camelCase)
+#   3. "'dict object' has no attribute 'resources'" → il task di wait usava
+#      kubernetes.core.k8s_info male; ora usiamo until/retries correttamente
+#   4. CDI non poteva raggiungere MinIO → URL interno cluster (non 127.0.0.1)
+# =============================================================================
+
+- name: "1. Crea Secret con credenziali S3 per CDI"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ s3_secret_name }}"
+        namespace: "{{ ocp_namespace }}"
+        # Label richiesta da CDI per riconoscere il secret come credenziale S3
+        labels:
+          app: migration-framework
+      type: Opaque
+      stringData:
+        # CDI si aspetta ESATTAMENTE queste due chiavi per l'autenticazione S3
+        accessKeyId: "{{ minio_access_key }}"
+        secretKey:   "{{ minio_secret_key }}"
+  tags: migration_cdi
+
+- name: "2. Crea DataVolume CDI (importazione + conversione VMDK)"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: cdi.kubevirt.io/v1beta1
+      kind: DataVolume
+      metadata:
+        name: "{{ dv_name }}"
+        namespace: "{{ ocp_namespace }}"
+        annotations:
+          # Forza il binding immediato del PVC anche se la storageClass
+          # ha WaitForFirstConsumer (necessario per CDI populator)
+          cdi.kubevirt.io/storage.bind.immediate.requested: "true"
+          # Usa il meccanismo populator di CDI (più efficiente)
+          cdi.kubevirt.io/storage.usePopulator: "true"
+      spec:
+        source:
+          s3:
+            # URL INTERNO al cluster: CDI non può usare 127.0.0.1
+            # Il pod importer CDI è dentro OpenShift, quindi raggiunge
+            # MinIO tramite il Service DNS interno
+            url: "{{ minio_ocp_endpoint }}/{{ minio_bucket }}/{{ vmdk_object_name }}"
+            # FIX: il campo è "secretRef" (camelCase), NON "secret_ref" (snake_case)
+            # Con snake_case Ansible dava "[WARNING] unknown field"
+            secretRef: "{{ s3_secret_name }}"
+        storage:
+          resources:
+            requests:
+              storage: "{{ dv_storage_size }}"
+          storageClassName: "{{ dv_storage_class }}"
+  tags: migration_cdi
+
+- name: "3. Attesa completamento importazione CDI (fase: Succeeded)"
+  # FIX del bug principale: usare kubernetes.core.k8s_info in un loop until
+  # Il task precedente registrava dv_status come oggetto k8s_info, ma il
+  # retry controllava dv_status.resources che non esiste al primo tentativo.
+  # Soluzione: registriamo il risultato dentro il loop e controlliamo .resources
+  kubernetes.core.k8s_info:
+    api_version: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    name: "{{ dv_name }}"
+    namespace: "{{ ocp_namespace }}"
+  register: dv_status
+  # Riprova ogni 10 secondi per max 30 minuti (180 tentativi)
+  # Il tempo dipende dalla dimensione del VMDK e dalla velocità della rete
+  retries: 180
+  delay: 10
+  # La condizione è vera quando CDI ha finito (phase: Succeeded)
+  until: >
+    dv_status.resources is defined and
+    dv_status.resources | length > 0 and
+    dv_status.resources[0].status.phase is defined and
+    dv_status.resources[0].status.phase == 'Succeeded'
+  tags: migration_cdi
+
+- name: "4. Mostra stato finale DataVolume"
+  debug:
+    msg: |
+      ✅ DataVolume importato con successo!
+      Nome:     {{ dv_status.resources[0].metadata.name }}
+      Phase:    {{ dv_status.resources[0].status.phase }}
+      PVC:      {{ dv_status.resources[0].status.claimName }}
+      Progress: {{ dv_status.resources[0].status.progress | default('100%') }}
+  tags: migration_cdi

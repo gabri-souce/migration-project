@@ -1,0 +1,74 @@
+---
+# =============================================================================
+# roles/data_ingestion/tasks/main.yml
+# OBIETTIVO: Caricare il disco VMDK su MinIO tramite il port-forward locale.
+#
+# PREREQUISITI:
+#   - oc port-forward svc/landing-zone-service 9000:9000 -n gabvirt  (attivo!)
+#   - Il file VMDK esiste nel path specificato in group_vars/all.yml
+#
+# ERRORI RISOLTI IN QUESTO RUOLO:
+#   1. "KMS not configured" → disabilitato SSE con encryption='none'
+#   2. "Local object does not exist" → path corretto con lookup('env','HOME')
+#   3. ConnectTimeoutError sull'URL OCP → usiamo 127.0.0.1:9000 (port-forward)
+# =============================================================================
+
+- name: "1. Verifica esistenza file VMDK locale"
+  stat:
+    path: "{{ vmdk_local_path }}"
+  register: vmdk_file
+  tags: data_ingestion
+
+- name: "ERRORE: File VMDK non trovato"
+  fail:
+    msg: |
+      ❌ File VMDK non trovato: {{ vmdk_local_path }}
+      
+      Verifica il path corretto con:
+        ls ~/Library/
+        ls ~/Documents/
+        find ~ -name "*.vmdk" 2>/dev/null
+      
+      Poi sovrascrivi la variabile:
+        ansible-playbook site.yml --tags data_ingestion \
+          --extra-vars "vmdk_local_path=/path/corretto/disco.vmdk"
+  when: not vmdk_file.stat.exists
+  tags: data_ingestion
+
+- name: "2. Crea bucket '{{ minio_bucket }}' su MinIO"
+  amazon.aws.s3_bucket:
+    name: "{{ minio_bucket }}"
+    state: present
+    endpoint_url: "{{ minio_local_endpoint }}"
+    aws_access_key: "{{ minio_access_key }}"
+    aws_secret_key: "{{ minio_secret_key }}"
+    region: us-east-1
+  tags: data_ingestion
+
+- name: "3. Upload VMDK su MinIO tramite oc cp diretto"
+  ansible.builtin.shell: |
+    oc cp "{{ vmdk_local_path }}" \
+      {{ ocp_namespace }}/landing-zone:/data/migration/{{ vmdk_object_name }}
+  args:
+    executable: /bin/bash
+  register: upload_result
+  tags: data_ingestion
+
+- name: "4. Verifica upload completato"
+  ansible.builtin.shell: |
+    oc exec -n {{ ocp_namespace }} landing-zone -- ls -lh /data/migration/{{ vmdk_object_name }}
+  args:
+    executable: /bin/bash
+  register: verify_result
+  failed_when: verify_result.rc != 0
+  tags: data_ingestion
+
+- name: "5. Mostra risultato upload"
+  debug:
+    msg: |
+      ✅ Upload completato!
+      {{ verify_result.stdout }}
+      
+      Ora puoi procedere con:
+        ansible-playbook site.yml --tags "migration_cdi,vm_provisioning"
+  tags: data_ingestion

@@ -1,0 +1,97 @@
+---
+# =============================================================================
+# roles/infra_setup/tasks/main.yml
+# OBIETTIVO: Deployare MinIO come "Landing Zone" su OpenShift.
+#
+# MinIO è un object storage S3-compatibile. Lo usiamo come staging area:
+#   Mac → upload VMDK su MinIO → CDI legge da MinIO → crea PVC
+#
+# Il pod e il service vengono creati nel namespace {{ ocp_namespace }} (gabvirt).
+# =============================================================================
+
+- name: "1. Deploy Pod MinIO (Landing Zone S3)"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Pod
+      metadata:
+        name: landing-zone
+        namespace: "{{ ocp_namespace }}"
+        labels:
+          app: landing-zone
+      spec:
+        containers:
+          - name: minio
+            # Immagine MinIO ufficiale (versione leggera)
+            image: quay.io/minio/minio:latest
+            args:
+              - server
+              - /data
+              - --console-address
+              - ":9001"
+            env:
+              - name: MINIO_ROOT_USER
+                value: "{{ minio_access_key }}"
+              - name: MINIO_ROOT_PASSWORD
+                value: "{{ minio_secret_key }}"
+            ports:
+              - containerPort: 9000   # API S3
+              - containerPort: 9001   # Web Console
+            # IMPORTANTE: MinIO di default tenta la cifratura lato server con KMS.
+            # Disabilitando MINIO_KMS_SECRET_KEY il server parte in modalità plain.
+            # Questo risolve l'errore "KMS not configured" che abbiamo incontrato.
+            volumeMounts:
+              - name: data
+                mountPath: /data
+        volumes:
+          - name: data
+            emptyDir: {}
+  tags: infra_setup
+
+- name: "2. Attesa avvio Pod MinIO (Landing Zone)"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    name: landing-zone
+    namespace: "{{ ocp_namespace }}"
+    wait: true
+    wait_condition:
+      type: Ready
+      status: "True"
+    wait_timeout: 120
+  tags: infra_setup
+
+- name: "3. Crea Service ClusterIP per MinIO"
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: landing-zone-service
+        namespace: "{{ ocp_namespace }}"
+      spec:
+        selector:
+          app: landing-zone
+        ports:
+          - name: s3-api
+            port: 9000
+            targetPort: 9000
+          - name: console
+            port: 9001
+            targetPort: 9001
+        type: ClusterIP
+  tags: infra_setup
+
+- name: "4. INFO: ricorda di avviare il port-forward"
+  debug:
+    msg: |
+      ✅ MinIO deployato con successo!
+      
+      Ora APRI UN NUOVO TERMINALE e lancia:
+        oc port-forward svc/landing-zone-service 9000:9000 -n {{ ocp_namespace }}
+      
+      Poi esegui il passo successivo:
+        ansible-playbook site.yml --tags "data_ingestion"
+  tags: infra_setup

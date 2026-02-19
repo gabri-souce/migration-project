@@ -1,0 +1,32 @@
+---
+# =============================================================================
+# Enterprise Migration Framework: Gen2 (VMware) → Gen3 (OpenShift Virt)
+# =============================================================================
+# Tag disponibili:
+#   awx_setup       → Deploya AWX su gabvirt via Helm
+#   infra_setup     → Deploya MinIO pod + service
+#   data_ingestion  → Upload immagine su MinIO
+#   migration_cdi   → Crea Secret S3 + DataVolume CDI
+#   vm_provisioning → Deploya VirtualMachine KubeVirt
+# =============================================================================
+
+- name: "Enterprise Migration Framework: Gen2 to Gen3"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  roles:
+    - role: awx_setup
+      tags: awx_setup
+
+    - role: infra_setup
+      tags: infra_setup
+
+    - role: data_ingestion
+      tags: data_ingestion
+
+    - role: migration_cdi
+      tags: migration_cdi
+
+    - role: vm_provisioning
+      tags: vm_provisioning

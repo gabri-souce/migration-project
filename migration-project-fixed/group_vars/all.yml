@@ -1,0 +1,30 @@
+---
+# =============================================================================
+# group_vars/all.yml  -  Variabili globali del progetto
+# =============================================================================
+
+# ─── OPENSHIFT ───────────────────────────────────────────────────────────────
+ocp_namespace:   gabvirt
+ocp_apps_domain: apps.migrationlab.devopstribe.it
+
+# ─── MINIO (Landing Zone) ────────────────────────────────────────────────────
+minio_local_endpoint: "http://127.0.0.1:9000"
+minio_ocp_endpoint:   "http://landing-zone-service:9000"
+minio_bucket:         "migration"
+minio_access_key:     "minioadmin"
+minio_secret_key:     "minioadmin"
+
+# ─── FILE IMMAGINE SORGENTE ──────────────────────────────────────────────────
+vmdk_local_path:  "/Users/pierluigi_cataoli/Virtual Machines.localized/Ubuntu 64-bit Server 22.04.5.vmwarevm/Virtual Disk.vmdk"
+vmdk_object_name: "ubuntu-server.vmdk"
+
+# ─── CDI / DATAVOLUME ────────────────────────────────────────────────────────
+dv_name:          "ubuntu-prod-dv"
+dv_storage_size:  "25Gi"
+dv_storage_class: "lvms-vg01-immediate"
+s3_secret_name:   "s3-credentials"
+
+# ─── VIRTUAL MACHINE ─────────────────────────────────────────────────────────
+vm_name:         "ubuntu-prod"
+vm_instancetype: "u1.medium"
+vm_preference:   "ubuntu"

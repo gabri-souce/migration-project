@@ -1,0 +1,11 @@
+---
+# inventory.yml
+# Questo progetto gira interamente su localhost (il tuo Mac M4).
+# Ansible parla con OpenShift tramite oc/kubectl (kubeconfig già configurato).
+# NON serve un inventario remoto: tutto è "connection: local".
+
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
+      ansible_python_interpreter: /Users/pierluigi_cataoli/.local/pipx/venvs/ansible-core/bin/python3
