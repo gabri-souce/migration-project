@@ -47,11 +47,10 @@
 
 - name: "3. Upload VMDK su MinIO tramite oc cp diretto"
   ansible.builtin.shell: |
-    oc cp "{{ vmdk_local_path }}" \
-      {{ ocp_namespace }}/landing-zone:/data/migration/{{ vmdk_object_name }}
+    oc exec -n {{ ocp_namespace }} landing-zone -- mkdir -p /data/migration
+    cat "{{ vmdk_local_path }}" | oc exec -i -n {{ ocp_namespace }} landing-zone -- sh -c 'cat > /data/migration/{{ vmdk_object_name }}'
   args:
     executable: /bin/bash
-  register: upload_result
   tags: data_ingestion
 
 - name: "4. Verifica upload completato"
