@@ -15,7 +15,7 @@ minio_access_key:     "minioadmin"
 minio_secret_key:     "minioadmin"
 
 # ─── FILE IMMAGINE SORGENTE ──────────────────────────────────────────────────
-vmdk_local_path:  "/Users/pierluigi_cataoli/Virtual Machines.localized/Ubuntu 64-bit Server 22.04.5.vmwarevm/Virtual Disk.vmdk"
+vmdk_local_path:  "/Users/pierluigi_cataoli/Virtual Machines.localized/Ubuntu 64-bit Server 22.04.5.vmwarevm"
 vmdk_object_name: "ubuntu-server.vmdk"
 
 # ─── CDI / DATAVOLUME ────────────────────────────────────────────────────────
